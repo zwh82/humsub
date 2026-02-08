@@ -4,6 +4,24 @@ This Snakemake pipeline quantifies microbial **subspecies** in metagenomic sampl
 
 It is part of the [HuMSub](https://zenodo.org/records/15862096) framework for high-resolution metagenomic analysis.
 
+### python
+
+```
+mamba create -n gut sourmash=4.6.1 python=3.9 path pandas pyyaml -y
+
+# download
+python humsub/Workflows/use_catalog/workflow/python/main.py --task download --config configs/default_config_python.yaml
+
+# process 
+python humsub/Workflows/use_catalog/workflow/python/main.py --task process --config configs/default_config_python.yaml --output-dir output --threads 16
+
+# combine
+python humsub/Workflows/use_catalog/workflow/python/main.py --task combine --config configs/default_config_python.yaml --output-dir output --threads 16
+
+# taxonomy
+python humsub/Workflows/use_catalog/workflow/python/main.py --task taxonomy --config configs/default_config_python.yaml --output-dir output --threads 16
+```
+
 ---
 
 ## Overview

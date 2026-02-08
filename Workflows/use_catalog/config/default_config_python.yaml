@@ -1,0 +1,29 @@
+# Sample table configuration
+# generate_sample_table: false  # If true, generate the sample table from FASTQ files
+# fastq_dir:  # Directory containing input FASTQ files
+sample_table: data_test/samples_test.tsv  # Path where the sample table will be written
+parse_sample_table: data_test/parse_samples_table.tsv
+fastq_info: data_test/fastq_info
+failed_sample: data_test/failed_sample.txt
+
+# Database & taxonomy
+resource_dir: resources
+humsub_path: resources/HuMSub_51_1000.sbt.zip  # Path towards the panhashome
+taxonomy_table: resources/taxonomy_mapping.tsv  # Mapping of internal names to taxonomy
+taxonomy_version: RS226_taxonomy  # Choose between RS226_taxonomy or RS95_taxonomy
+
+# # Preprocessing options
+# trim_reads: false  # If true, perform read trimming
+# paired_reads: true  # If true, assume paired-end reads
+
+# Sourmash sketching parameters
+kmer_len: 51  # Length of the k-mers to use, must be the same as the one used to build the panhashome
+scaled: 1000  # Scaled value for the sourmash, must be the same as the one used to build the panhashome
+scaled_downsample: 1000  # Used if sample sketches are created using lower scaling
+threshold_bp: 25000  # Minimum base pairs threshold for filtering
+
+# Resources
+tmp_dir: ./scratch  # Temporary directory for intermediate files
+mem_mb: 24000  # Memory in MB per job
+time_min: 30  # Runtime in minutes per job
+threads: 1  # Number of threads per job

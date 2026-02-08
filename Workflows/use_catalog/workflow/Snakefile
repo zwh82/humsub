@@ -4,50 +4,58 @@ import os
 configfile: f"{os.path.dirname(workflow.snakefile)}/../config/default_config.yaml"
 RESOURCE_DIR = os.path.join(os.path.dirname(workflow.snakefile), "../resources")
 
-(SAMPLES,) = glob_wildcards("output/trimmed_reads/{sample}")
+# (SAMPLES,) = glob_wildcards("output/trimmed_reads/{sample}")
 
-if config["trim_reads"] == False:
+# if config["trim_reads"] == False:
 
-    localrules:
-        trim_reads,
-
-
-SAMPLE_TABLE_PATH = config.get("sample_table", "samples.tsv")
-FASTQ_DIR = config.get("fastq_dir", "reads")
-
-if config.get("generate_sample_table", False):
-
-    rule generate_sample_table:
-        output:
-            SAMPLE_TABLE_PATH,
-        run:
-            import os
-            import pandas as pd
-            from glob import glob
-
-            fastqs = sorted(
-                glob(os.path.join(config.get("fastq_dir", "reads"), "*.fastq.gz"))
-            )
-
-            sample_dict = {}
-            for fq in fastqs:
-                sample_name = os.path.basename(fq).split("_")[0]
-                if sample_name not in sample_dict:
-                    sample_dict[sample_name] = {}
-                if "_R1" in fq:
-                    sample_dict[sample_name]["Reads_QC_R1"] = fq
-                elif "_R2" in fq:
-                    sample_dict[sample_name]["Reads_QC_R2"] = fq
-                else:
-                    sample_dict[sample_name]["Reads_QC_se"] = fq
-
-            df = pd.DataFrame.from_dict(sample_dict, orient="index")
-            df.index.name = "sample"
-            df.to_csv(output[0], sep="\t", na_rep="")
+#     localrules:
+#         trim_reads,
 
 
+# SAMPLE_TABLE_PATH = config.get("sample_table", "samples.tsv")
+# FASTQ_DIR = config.get("fastq_dir", "reads")
 
-include: "sample_table.smk"
+# SAMPLES = []
+# if Path(SAMPLE_TABLE_PATH).exists():
+#     with open(SAMPLE_TABLE_PATH, "r") as f:
+#         next(f)
+#         for line in f:
+#             tokens = line.strip().split()
+#             SAMPLES.append(tokens[0])
+
+# if config.get("generate_sample_table", False):
+
+#     rule generate_sample_table:
+#         output:
+#             SAMPLE_TABLE_PATH,
+#         run:
+#             import os
+#             import pandas as pd
+#             from glob import glob
+
+#             fastqs = sorted(
+#                 glob(os.path.join(config.get("fastq_dir", "reads"), "*.fastq.gz"))
+#             )
+
+#             sample_dict = {}
+#             for fq in fastqs:
+#                 sample_name = os.path.basename(fq).split("_")[0]
+#                 if sample_name not in sample_dict:
+#                     sample_dict[sample_name] = {}
+#                 if "_R1" in fq:
+#                     sample_dict[sample_name]["Reads_QC_R1"] = fq
+#                 elif "_R2" in fq:
+#                     sample_dict[sample_name]["Reads_QC_R2"] = fq
+#                 else:
+#                     sample_dict[sample_name]["Reads_QC_se"] = fq
+
+#             df = pd.DataFrame.from_dict(sample_dict, orient="index")
+#             df.index.name = "sample"
+#             df.to_csv(output[0], sep="\t", na_rep="")
+
+
+
+# include: "sample_table.smk"
 
 
 rule all:
@@ -65,30 +73,76 @@ rule download_sbt_index:
         """
 
 
-rule trim_reads:
-    input:
-        get_quality_controlled_reads,
+# rule trim_reads:
+#     input:
+#         get_quality_controlled_reads,
+#     output:
+#         trimmed_reads=directory("output/trimmed_reads/{sample}"),
+#     conda:
+#         "envs/sourmash.yaml",
+#     log:
+#         "output/log/trimm_reads/{sample}.log",
+#     threads: 1
+#     resources:
+#         mem_mb=int(config["mem_mb"]),
+#         time_min=int(config["time_min"]),
+#         cpus_per_task=1,
+#     params:
+#         mem=int(config["mem_mb"]) * 1000000 * 0.9,
+#         tmp_dir=config["tmp_dir"],
+#     script:
+#         "scripts/trim_reads.py"
+
+
+
+checkpoint update_parse_sample_table:
     output:
-        trimmed_reads=directory("output/trimmed_reads/{sample}"),
-    conda:
-        "envs/sourmash.yaml",
-    log:
-        "output/log/trimm_reads/{sample}.log",
-    threads: 1
-    resources:
-        mem_mb=int(config["mem_mb"]),
-        time_min=int(config["time_min"]),
-        cpus_per_task=1,
+        new_parse_sample_table = config["parse_sample_table"]    
     params:
-        mem=int(config["mem_mb"]) * 1000000 * 0.9,
-        tmp_dir=config["tmp_dir"],
+        sample_table = config["sample_table"],
+        parse_sample_table = config["parse_sample_table"],
+        fastq_info = config["fastq_info"],
+        failed_sample = config["failed_sample"]
+    log:
+        "output/log/update/update.log"
+    conda:
+        "envs/sourmash.yaml"
+    resources:
+        mem_mb=12000,
+        time_min=10,
+        tmpdir=config["tmp_dir"],
     script:
-        "scripts/trim_reads.py"
+        "scripts/check.py"    
 
+# SAMPLES = []
+# with open(update_parse_sample_table.output.new_parse_sample_table, "r") as f:
+#     for line in f:
+#         if line.startswith("#"): continue
+#         tokens = line.strip().split()
+#         SAMPLES.append(tokens[1])
 
+def get_samples_after_update(wildcards=None):
+
+    table_file = checkpoints.update_parse_sample_table.get().output.new_parse_sample_table
+    
+    samples = []
+    try:
+        with open(table_file, "r") as f:
+            for line in f:
+                if line.startswith("#"):
+                    continue
+                tokens = line.strip().split()
+                if len(tokens) > 1:
+                    samples.append(tokens[1])
+    except Exception as e:
+        print(f"fail: {e}")
+    
+    return samples
+
+fastq_dir = config["fastq_info"]
 rule sketch_reads:
     input:
-        rules.trim_reads.output.trimmed_reads,
+        reads_list=f"{fastq_dir}" + "/{sample}/{sample}.txt",
     output:
         sketch="output/sketch_samples/{sample}.sig",
     conda:
@@ -110,7 +164,7 @@ rule sketch_reads:
         mem=int(config["mem_mb"]) * 1000000 * 0.9,
     shell:
         "mkdir -p output/sketch_samples && "
-        "sourmash sketch dna -p k={params.kmer_len},abund,scaled={params.scaled} {input}/*.fastq.gz --merge {wildcards.sample} -o {output.sketch} &> {log}"
+        "sourmash sketch dna -p k={params.kmer_len},abund,scaled={params.scaled} --from-file {input.reads_list} --merge {wildcards.sample} -o {output.sketch} &> {log}"
 
 
 rule gather:
@@ -142,7 +196,11 @@ rule gather:
 
 rule gather_all:
     input:
-        expand("output/gather/{sample}.csv", sample=SAMPLES),
+        # expand("output/gather/{sample}.csv", sample=get_samples_after_update()),
+        lambda wildcards: expand(
+            "output/gather/{sample}.csv", 
+            sample=get_samples_after_update(wildcards) 
+        )
     output:
         "output/subspecies_relab.csv",
     conda:
