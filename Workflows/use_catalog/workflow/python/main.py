@@ -309,6 +309,96 @@ def run_gather_for_sample(sample, config):
         print(f"Sample {sample}: Exception - {e}")
         return False
 
+def run_sketch_and_gather(sample, config):
+    """Run sourmash sketch + gather for a single sample"""
+
+    fastq_dir = config["fastq_info"]
+    output_dir = config["output_dir"]
+
+    # -------- paths --------
+    reads_list = f"{fastq_dir}/{sample}/{sample}.txt"
+
+    sketch_output = f"{output_dir}/sketch_samples/{sample}.sig"
+    sketch_log = f"{output_dir}/log/sketch_reads/{sample}.log"
+
+    gather_output = f"{output_dir}/gather/{sample}.csv"
+    gather_log = f"{output_dir}/log/gather/{sample}.log"
+
+    # -------- step 1: sketch --------
+    if not Path(sketch_output).exists():
+        if not os.path.exists(reads_list):
+            print(f"Error: Reads list not found for sample {sample}: {reads_list}")
+            return False
+
+        sketch_cmd = (
+            f"sourmash sketch dna "
+            f"-p k={config['kmer_len']},abund,scaled={config['scaled']} "
+            f"--from-file {reads_list} "
+            f"--merge {sample} "
+            f"-o {sketch_output}"
+        )
+
+        try:
+            with open(sketch_log, 'w') as log_f:
+                result = subprocess.run(
+                    sketch_cmd,
+                    shell=True,
+                    stdout=log_f,
+                    stderr=subprocess.STDOUT,
+                    text=True
+                )
+            if result.returncode != 0:
+                print(f"Sample {sample}: sketch failed")
+                return False
+            print(f"Sample {sample}: sketch success")
+        except Exception as e:
+            print(f"Sample {sample}: sketch exception - {e}")
+            return False
+    else:
+        print(f"Sample {sample}: sketch skipped")
+
+    # -------- step 2: gather --------
+    if not Path(gather_output).exists():
+        if not os.path.exists(sketch_output):
+            print(f"Error: Sketch file missing for sample {sample}")
+            return False
+
+        gather_cmd = (
+            f"sourmash gather "
+            f"-k {config['kmer_len']} "
+            f"--threshold-bp={config['threshold_bp']} "
+            f"--scaled {config['scaled_downsample']} "
+            f"-o {gather_output} "
+            f"{sketch_output} {config['humsub_path']}"
+        )
+
+        try:
+            with open(gather_log, 'w') as log_f:
+                result = subprocess.run(
+                    gather_cmd,
+                    shell=True,
+                    stdout=log_f,
+                    stderr=subprocess.STDOUT,
+                    text=True
+                )
+            if result.returncode != 0:
+                print(f"Sample {sample}: gather failed")
+                return False
+            print(f"Sample {sample}: gather success")
+        except Exception as e:
+            print(f"Sample {sample}: gather exception - {e}")
+            return False
+    else:
+        print(f"Sample {sample}: gather skipped")
+
+    try:
+        os.remove(sketch_output)
+        print(f"Sample {sample}: sketch file removed")
+    except Exception as e:
+        print(f"Sample {sample}: failed to remove sketch file - {e}")
+
+    return True
+
 def run_gather_all(config):
     """Combine all gather results into a single file"""
     print("Combining all gather results...")
@@ -416,6 +506,16 @@ def process_samples_distributed(samples, config, task, threads, start_idx=None, 
         )
         print(f"Gather: {gather_success}/{len(subset_samples)} successful")
         success_count += gather_success
+    elif task == "skga":
+        gather_success = parallel_process(
+            items=subset_samples,
+            process_func=skga_wrapper,
+            func_name="skga",
+            max_workers=threads,
+            config=config
+        )
+        print(f"Sketch and gather: {gather_success}/{len(subset_samples)} successful")
+        success_count += gather_success        
     # success_count = 0
     # for i, sample in enumerate(subset_samples):
     #     print(f"[{i+1}/{len(subset_samples)}] Processing sample: {sample}")
@@ -519,11 +619,15 @@ def sketch_wrapper(sample: str, config: dict) -> Tuple[bool, str]:
 def gather_wrapper(sample: str, config: dict) -> Tuple[bool, str]:
     return run_gather_for_sample(sample, config)
 
+def skga_wrapper(sample: str, config: dict) -> Tuple[bool, str]:
+    return run_sketch_and_gather(sample, config)
+
 def main():
+    print("Command:", " ".join(sys.argv))
     parser = argparse.ArgumentParser(description='HuMSub Sourmash Analysis Pipeline')
     parser.add_argument('--config', default='config/default_config.yaml', 
                        help='Path to configuration file')
-    parser.add_argument('--task', choices=['all', 'download', 'process', 'sketch', 'gather', 'combine', 'taxonomy'],
+    parser.add_argument('--task', choices=['all', 'download', 'process', 'sketch', 'gather', "skga", 'combine', 'taxonomy'],
                        default='all', help='Task to execute')
     parser.add_argument('--samples', nargs='+', help='Specific samples to process')
     parser.add_argument('--start', type=int, help='Start index for distributed processing')
@@ -535,7 +639,9 @@ def main():
     parser.add_argument('--threads', default=64, type=int,
                        help='threads')     
     parser.add_argument('--check', default=None, type=str,
-                       help='Path to configuration file')                      
+                       help='Path to configuration file')  
+    parser.add_argument('--no-run', action='store_true',
+                       help='Only check sample number')                         
     
     args = parser.parse_args()
     
@@ -573,83 +679,103 @@ def main():
         sys.exit(1)
     
     print(f"Found {len(samples)} samples")
-    
+    if args.no_run:
+        sys.exit(0)
     # Filter samples if specific samples provided
     if args.samples:
         samples = [s for s in samples if s in args.samples]
         print(f"Processing {len(samples)} specific samples")
     
-    # Execute tasks
-    if args.task in ['all', 'sketch']:
-        print("\n" + "="*50)
-        print("Running sketch step")
-        print("="*50)
-        # Create output directory
-        Path(f"{output_dir}/sketch_samples").mkdir(parents=True, exist_ok=True)        
-        if args.start is not None or args.end is not None:
-            process_samples_distributed(samples, config, 'sketch', args.threads, args.start, args.end)
-        else:
-            # for sample in samples:
-            #     run_sketch_for_sample(sample, config)
-            sketch_success = parallel_process(
-                items=samples,
-                process_func=sketch_wrapper,
-                func_name="sketch",
-                max_workers=args.threads,
-                config=config
-            )
-            print(f"Sketch: {sketch_success}/{len(samples)} successful")
 
-    if args.task in ['all', 'gather']:
-        print("\n" + "="*50)
-        print("Running gather step")
-        print("="*50)
-        # Create output directory
-        Path(f"{output_dir}/gather").mkdir(parents=True, exist_ok=True)        
-        if args.start is not None or args.end is not None:
-            process_samples_distributed(samples, config, 'gather', args.start, args.end)
-        else:
-            # for sample in samples:
-            #     run_gather_for_sample(sample, config)
-            gather_success = parallel_process(
-                items=samples,
-                process_func=gather_wrapper,
-                func_name="gather",
-                max_workers=args.threads,
-                config=config
-            )
-            print(f"Gather: {gather_success}/{len(samples)} successful")
-
-    if args.task in ['all', 'process']:
+    # skga and process all perform sketch and gather, but the skga perform two steps on single sample at the same time.
+    if args.task in ["all", "skga"]:
         print("\n" + "="*50)
         print("Running sketch and gather steps")
-        print("="*50)
-        # Create output directory
-        Path(f"{output_dir}/sketch_samples").mkdir(parents=True, exist_ok=True) 
-        Path(f"{output_dir}/gather").mkdir(parents=True, exist_ok=True)        
+        Path(f"{output_dir}/sketch_samples").mkdir(parents=True, exist_ok=True)     
+        Path(f"{output_dir}/gather").mkdir(parents=True, exist_ok=True)      
         if args.start is not None or args.end is not None:
-            process_samples_distributed(samples, config, 'sketch', args.threads, args.start, args.end)
-            process_samples_distributed(samples, config, 'gather', args.threads, args.start, args.end)
-        else:
-            # for sample in samples:
-            #     run_sketch_for_sample(sample, config)  
-            #     run_gather_for_sample(sample, config)
-            sketch_success = parallel_process(
-                items=samples,
-                process_func=sketch_wrapper,
-                func_name="sketch",
-                max_workers=args.threads,
-                config=config
-            )
-            print(f"Sketch: {sketch_success}/{len(samples)} successful")
+            process_samples_distributed(samples, config, 'skga', args.threads, args.start, args.end)
             gather_success = parallel_process(
                 items=samples,
-                process_func=gather_wrapper,
-                func_name="gather",
+                process_func=skga_wrapper,
+                func_name="skga",
                 max_workers=args.threads,
                 config=config
             )
-            print(f"Gather: {gather_success}/{len(samples)} successful")
+            print(f"Sketch and gather: {gather_success}/{len(samples)} successful")
+
+    else:
+        # Execute tasks
+        if args.task in ['all', 'sketch']:
+            print("\n" + "="*50)
+            print("Running sketch step")
+            print("="*50)
+            # Create output directory
+            Path(f"{output_dir}/sketch_samples").mkdir(parents=True, exist_ok=True)        
+            if args.start is not None or args.end is not None:
+                process_samples_distributed(samples, config, 'sketch', args.threads, args.start, args.end)
+            else:
+                # for sample in samples:
+                #     run_sketch_for_sample(sample, config)
+                sketch_success = parallel_process(
+                    items=samples,
+                    process_func=sketch_wrapper,
+                    func_name="sketch",
+                    max_workers=args.threads,
+                    config=config
+                )
+                print(f"Sketch: {sketch_success}/{len(samples)} successful")
+
+        if args.task in ['all', 'gather']:
+            print("\n" + "="*50)
+            print("Running gather step")
+            print("="*50)
+            # Create output directory
+            Path(f"{output_dir}/gather").mkdir(parents=True, exist_ok=True)        
+            if args.start is not None or args.end is not None:
+                process_samples_distributed(samples, config, 'gather', args.start, args.end)
+            else:
+                # for sample in samples:
+                #     run_gather_for_sample(sample, config)
+                gather_success = parallel_process(
+                    items=samples,
+                    process_func=gather_wrapper,
+                    func_name="gather",
+                    max_workers=args.threads,
+                    config=config
+                )
+                print(f"Gather: {gather_success}/{len(samples)} successful")
+
+        if args.task in ['all', 'process']:
+            print("\n" + "="*50)
+            print("Running sketch and gather steps")
+            print("="*50)
+            # Create output directory
+            Path(f"{output_dir}/sketch_samples").mkdir(parents=True, exist_ok=True) 
+            Path(f"{output_dir}/gather").mkdir(parents=True, exist_ok=True)        
+            if args.start is not None or args.end is not None:
+                process_samples_distributed(samples, config, 'sketch', args.threads, args.start, args.end)
+                process_samples_distributed(samples, config, 'gather', args.threads, args.start, args.end)
+            else:
+                # for sample in samples:
+                #     run_sketch_for_sample(sample, config)  
+                #     run_gather_for_sample(sample, config)
+                sketch_success = parallel_process(
+                    items=samples,
+                    process_func=sketch_wrapper,
+                    func_name="sketch",
+                    max_workers=args.threads,
+                    config=config
+                )
+                print(f"Sketch: {sketch_success}/{len(samples)} successful")
+                gather_success = parallel_process(
+                    items=samples,
+                    process_func=gather_wrapper,
+                    func_name="gather",
+                    max_workers=args.threads,
+                    config=config
+                )
+                print(f"Gather: {gather_success}/{len(samples)} successful")
 
 
     # These steps should be run only once after all samples are processed

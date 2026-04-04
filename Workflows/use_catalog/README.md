@@ -12,14 +12,20 @@ mamba create -n gut sourmash=4.6.1 python=3.9 path pandas pyyaml -y
 # download
 python humsub/Workflows/use_catalog/workflow/python/main.py --task download --config configs/default_config_python.yaml
 
-# process 
+# process (all sketch and then all gather)
 python humsub/Workflows/use_catalog/workflow/python/main.py --task process --config configs/default_config_python.yaml --output-dir output --threads 16
+
+# sketch and gather
+python humsub/Workflows/use_catalog/workflow/python/main.py --task skga --config configs/default_config_python.yaml --output-dir output --threads 16
 
 # combine
 python humsub/Workflows/use_catalog/workflow/python/main.py --task combine --config configs/default_config_python.yaml --output-dir output --threads 16
 
 # taxonomy
 python humsub/Workflows/use_catalog/workflow/python/main.py --task taxonomy --config configs/default_config_python.yaml --output-dir output --threads 16
+
+# only stat
+add `--no-run`
 ```
 
 ---
