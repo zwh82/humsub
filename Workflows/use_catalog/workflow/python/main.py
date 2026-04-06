@@ -20,7 +20,7 @@ import multiprocessing
 from typing import List, Callable, Any, Tuple
 import time
 from collections import defaultdict
-
+import logging
 
 def load_config(config_path):
     """Load configuration from YAML file"""
@@ -50,7 +50,7 @@ def download_sbt_index(config):
     if os.path.exists(sbt_path):
         print(f"SBT index already exists: {sbt_path}")
         return True
-    
+    Path(config['resource_dir']).mkdir(exist_ok=True, parents=True)
     print(f"Downloading SBT index to: {sbt_path}")
     cmd = f"wget -O {sbt_path} https://zenodo.org/records/15862096/files/HuMSub_51_1000.sbt.zip"
     
@@ -226,6 +226,24 @@ def check(config):
                         file = infos[2].replace(",", "\n")
                         f2.write(file + "\n")
 
+def generate_samples_from_list(config):
+    fastq_info = config["fastq_info"]
+    samples = []
+    with open(config["sample_list"], "r") as f:
+        for line in f:
+            tokens = line.strip().split("\t")
+            if len(tokens) < 2: continue
+            prj = tokens[0]
+            sample = tokens[1]
+            sample_path = Path(fastq_info) / sample
+            sample_path.mkdir(parents=True, exist_ok=True)
+            sample_file = sample_path / f"{sample}.txt"
+            with open(sample_file, "w") as f2:
+                read_R1 = f"/public/share/acdumsgctu/qc_fastq/{prj}/{sample}_kneaddata_paired_1.fastq.gz"          
+                read_R2 = f"/public/share/acdumsgctu/qc_fastq/{prj}/{sample}_kneaddata_paired_2.fastq.gz"          
+                f2.write(f"{read_R1}\n{read_R2}\n")
+            samples.append(sample)
+    return samples
 
 def run_sketch_for_sample(sample, config):
     """Run sourmash sketch for a single sample"""
@@ -325,7 +343,7 @@ def run_sketch_and_gather(sample, config):
     gather_log = f"{output_dir}/log/gather/{sample}.log"
 
     # -------- step 1: sketch --------
-    if not Path(sketch_output).exists():
+    if not Path(sketch_output).exists() and not Path(gather_output).exists():
         if not os.path.exists(reads_list):
             print(f"Error: Reads list not found for sample {sample}: {reads_list}")
             return False
@@ -392,8 +410,9 @@ def run_sketch_and_gather(sample, config):
         print(f"Sample {sample}: gather skipped")
 
     try:
-        os.remove(sketch_output)
-        print(f"Sample {sample}: sketch file removed")
+        if Path(sketch_output).exists():
+            os.remove(sketch_output)
+            print(f"Sample {sample}: sketch file removed")
     except Exception as e:
         print(f"Sample {sample}: failed to remove sketch file - {e}")
 
@@ -483,7 +502,7 @@ def process_samples_distributed(samples, config, task, threads, start_idx=None, 
         end_idx = len(samples)
     
     subset_samples = samples[start_idx:end_idx]
-    
+    if threads > len(subset_samples): threads = len(subset_samples)
     print(f"Processing {len(subset_samples)} samples (indices {start_idx}-{end_idx-1})")
     success_count = 0
     if task == 'sketch':
@@ -670,9 +689,14 @@ def main():
         if args.task == "download":
             sys.exit(0)
     
-    check(config)
-    # Parse samples
-    samples = get_samples_from_table(config["parse_sample_table"])
+    if config.get("sample_list", None):
+        print("Running from sample list...")
+        samples = generate_samples_from_list(config)
+    else:
+        print("Running from sample metadata...")
+        check(config)
+        # Parse samples
+        samples = get_samples_from_table(config["parse_sample_table"])
     
     if not samples:
         print("No samples found. Exiting.")
@@ -695,6 +719,7 @@ def main():
         Path(f"{output_dir}/gather").mkdir(parents=True, exist_ok=True)      
         if args.start is not None or args.end is not None:
             process_samples_distributed(samples, config, 'skga', args.threads, args.start, args.end)
+        else:
             gather_success = parallel_process(
                 items=samples,
                 process_func=skga_wrapper,
